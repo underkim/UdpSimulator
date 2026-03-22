@@ -1,4 +1,4 @@
-﻿namespace UdpSimulator.Models.Define
+﻿namespace UdpSimulator.Models
 {
     public class Mapping
     {

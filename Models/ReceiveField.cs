@@ -1,6 +1,4 @@
-﻿using UdpSimulator.Models.Define;
-
-namespace UdpSimulator.Models
+﻿namespace UdpSimulator.Models
 {
     public class ReceiveField : Field
     {
