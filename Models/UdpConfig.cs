@@ -1,20 +1,14 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace UdpSimulator.Models
+﻿namespace UdpSimulator.Models
 {
     public class UdpConfig
     {
-       
 
-        public string LocalIp { get; set; } 
-        public int LocalPort { get; set; } 
-        public string RemoteIp { get; set; } 
-        public int RemotePort { get; set; } 
-        public UdpMode Mode { get; set; } 
+
+        public string LocalIp { get; set; }
+        public int LocalPort { get; set; }
+        public string RemoteIp { get; set; }
+        public int RemotePort { get; set; }
+        public UdpMode Mode { get; set; }
 
         public UdpConfig()
         {

@@ -1,13 +1,9 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using UdpSimulator.Models.Define;
 
 namespace UdpSimulator.Models
 {
     public class ReceiveField : Field
     {
-       
+        public Mapping? Mapping { get; set; }
     }
 }

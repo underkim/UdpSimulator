@@ -1,12 +1,8 @@
-﻿
-
-using System.Security.Cryptography.X509Certificates;
-
-namespace UdpSimulator.Models
+﻿namespace UdpSimulator.Models
 {
     public class Field
     {
-       
+
         public string Name { get; set; }
         public FieldType Type { get; set; }
         public int Size { get; set; }

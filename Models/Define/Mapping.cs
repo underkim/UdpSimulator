@@ -1,16 +1,10 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace UdpSimulator.Models.Define
+﻿namespace UdpSimulator.Models.Define
 {
     public class Mapping
     {
-        public MappingType Type { get; set; } 
-        public List<EnumMapping> Values { get; set; } 
-        public List<RangeMapping> Ranges { get; set; } 
+        public MappingType Type { get; set; }
+        public List<EnumMapping> Values { get; set; }
+        public List<RangeMapping> Ranges { get; set; }
         public string Formula { get; set; }
         public string Unit { get; set; } = "";
 
