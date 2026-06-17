@@ -46,12 +46,12 @@ public:
     void stop();
     bool send(const std::vector<uint8_t>& data);
 
-    bool     is_running()   const { return running_; }
-    int      max_payload()  const { return cfg_.mtu - 20 - 8; } // IP hdr + UDP hdr
-    uint64_t tx_count()     const { return tx_count_; }
-    uint64_t rx_count()     const { return rx_count_; }
-    uint64_t tx_bytes()     const { return tx_bytes_; }
-    uint64_t rx_bytes()     const { return rx_bytes_; }
+    bool     is_running()  const { return running_; }
+    int      max_payload() const { return cfg_.mtu - 20 - 8; } // IP hdr + UDP hdr
+    uint64_t tx_count()    const { return tx_count_; }
+    uint64_t rx_count()    const { return rx_count_; }
+    uint64_t tx_bytes()    const { return tx_bytes_; }
+    uint64_t rx_bytes()    const { return rx_bytes_; }
 
 private:
     void recv_loop();
@@ -70,7 +70,7 @@ private:
 
 class PacketLog {
 public:
-    explicit PacketLog(size_t max = 500);
+    explicit PacketLog(size_t max = 1000);
 
     void                 push(const Packet& p);
     std::vector<Packet>  snapshot() const;
@@ -83,8 +83,33 @@ private:
     size_t              max_;
 };
 
+// ─── PcapWriter ───────────────────────────────────────────────────────────────
+
+class PcapWriter {
+public:
+    PcapWriter() = default;
+    ~PcapWriter() { close(); }
+
+    bool open(const std::string& path);
+    void write(const Packet& p);
+    void close();
+    bool is_open() const { return file_ != nullptr; }
+    const std::string& path() const { return path_; }
+
+private:
+    FILE*       file_ = nullptr;
+    std::string path_;
+    std::mutex  mu_;
+};
+
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
 std::vector<uint8_t> parse_hex(const std::string& s);
 std::string          to_hex(const std::vector<uint8_t>& data, size_t max_bytes = 0);
 std::string          format_time(const std::chrono::system_clock::time_point& tp);
+
+// Write 4-byte little-endian value into buf
+inline void write_le32(uint8_t* buf, uint32_t v) {
+    buf[0] = v & 0xFF; buf[1] = (v >> 8) & 0xFF;
+    buf[2] = (v >> 16) & 0xFF; buf[3] = (v >> 24) & 0xFF;
+}

@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <cstring>
 #include <algorithm>
+#include <cstdio>
 
 // ─── UdpSocket ────────────────────────────────────────────────────────────────
 
@@ -85,7 +86,7 @@ bool UdpSocket::send(const std::vector<uint8_t>& data)
 
 void UdpSocket::recv_loop()
 {
-    uint8_t    buf[65536];
+    uint8_t     buf[65536];
     sockaddr_in from{};
     socklen_t   from_len = sizeof(from);
 
@@ -142,6 +143,96 @@ size_t PacketLog::size() const
     return log_.size();
 }
 
+// ─── PcapWriter ───────────────────────────────────────────────────────────────
+//
+// Writes a minimal pcap file (link type LINKTYPE_RAW = 101).
+// Each packet record contains a synthesised raw IPv4/UDP header so that
+// Wireshark can decode it without needing an Ethernet layer.
+
+static constexpr uint32_t PCAP_MAGIC    = 0xa1b2c3d4;
+static constexpr uint16_t PCAP_VER_MAJ  = 2;
+static constexpr uint16_t PCAP_VER_MIN  = 4;
+static constexpr uint32_t PCAP_SNAPLEN  = 65535;
+static constexpr uint32_t PCAP_LINKTYPE = 101; // LINKTYPE_RAW
+
+bool PcapWriter::open(const std::string& path)
+{
+    std::lock_guard<std::mutex> lk(mu_);
+    if (file_) { fclose(file_); file_ = nullptr; }
+
+    file_ = fopen(path.c_str(), "wb");
+    if (!file_) return false;
+    path_ = path;
+
+    // Global header (24 bytes)
+    uint8_t hdr[24] = {};
+    write_le32(hdr +  0, PCAP_MAGIC);
+    hdr[4] = PCAP_VER_MAJ & 0xFF; hdr[5] = (PCAP_VER_MAJ >> 8) & 0xFF;
+    hdr[6] = PCAP_VER_MIN & 0xFF; hdr[7] = (PCAP_VER_MIN >> 8) & 0xFF;
+    // thiszone, sigfigs already 0
+    write_le32(hdr + 16, PCAP_SNAPLEN);
+    write_le32(hdr + 20, PCAP_LINKTYPE);
+    fwrite(hdr, 1, sizeof(hdr), file_);
+    fflush(file_);
+    return true;
+}
+
+void PcapWriter::write(const Packet& p)
+{
+    // Synthesise a raw IPv4 + UDP header around the payload.
+    // IPv4 header: 20 bytes, UDP header: 8 bytes
+    constexpr size_t IP_HDR  = 20;
+    constexpr size_t UDP_HDR = 8;
+
+    uint16_t src_port = static_cast<uint16_t>(p.src_port);
+    uint16_t dst_port = static_cast<uint16_t>(p.dst_port);
+    uint16_t udp_len  = static_cast<uint16_t>(UDP_HDR + p.data.size());
+    uint16_t ip_len   = static_cast<uint16_t>(IP_HDR  + udp_len);
+
+    uint8_t ip[IP_HDR]  = {};
+    ip[0] = 0x45;                         // version=4, IHL=5
+    ip[1] = 0x00;                         // DSCP/ECN
+    ip[2] = (ip_len >> 8) & 0xFF;
+    ip[3] =  ip_len       & 0xFF;
+    ip[8] = 64;                           // TTL
+    ip[9] = 17;                           // protocol = UDP
+    // src / dst IP
+    inet_pton(AF_INET, p.src_ip.c_str(), ip + 12);
+    inet_pton(AF_INET, p.dst_ip.c_str(), ip + 16);
+
+    uint8_t udp[UDP_HDR] = {};
+    udp[0] = (src_port >> 8) & 0xFF; udp[1] = src_port & 0xFF;
+    udp[2] = (dst_port >> 8) & 0xFF; udp[3] = dst_port & 0xFF;
+    udp[4] = (udp_len  >> 8) & 0xFF; udp[5] = udp_len  & 0xFF;
+
+    uint32_t cap_len = static_cast<uint32_t>(IP_HDR + UDP_HDR + p.data.size());
+
+    auto dur  = p.timestamp.time_since_epoch();
+    auto secs = std::chrono::duration_cast<std::chrono::seconds>(dur);
+    auto usec = std::chrono::duration_cast<std::chrono::microseconds>(dur - secs);
+
+    // pcap packet record header (16 bytes)
+    uint8_t rec[16] = {};
+    write_le32(rec +  0, static_cast<uint32_t>(secs.count()));
+    write_le32(rec +  4, static_cast<uint32_t>(usec.count()));
+    write_le32(rec +  8, cap_len);
+    write_le32(rec + 12, cap_len);
+
+    std::lock_guard<std::mutex> lk(mu_);
+    if (!file_) return;
+    fwrite(rec, 1, sizeof(rec), file_);
+    fwrite(ip,  1, IP_HDR,      file_);
+    fwrite(udp, 1, UDP_HDR,     file_);
+    fwrite(p.data.data(), 1, p.data.size(), file_);
+    fflush(file_);
+}
+
+void PcapWriter::close()
+{
+    std::lock_guard<std::mutex> lk(mu_);
+    if (file_) { fclose(file_); file_ = nullptr; }
+}
+
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
 std::vector<uint8_t> parse_hex(const std::string& s)
@@ -158,7 +249,6 @@ std::vector<uint8_t> parse_hex(const std::string& s)
     for (size_t i = 0; i < digits.size(); i += 2)
         result.push_back(static_cast<uint8_t>(
             std::stoul(digits.substr(i, 2), nullptr, 16)));
-
     return result;
 }
 
@@ -166,17 +256,14 @@ std::string to_hex(const std::vector<uint8_t>& data, size_t max_bytes)
 {
     std::ostringstream oss;
     size_t limit = (max_bytes > 0 && max_bytes < data.size()) ? max_bytes : data.size();
-
     for (size_t i = 0; i < limit; ++i) {
         if (i > 0) oss << ' ';
         oss << std::hex << std::uppercase
             << std::setw(2) << std::setfill('0')
             << static_cast<int>(data[i]);
     }
-
     if (max_bytes > 0 && data.size() > max_bytes)
         oss << " ...(" << (data.size() - max_bytes) << " more)";
-
     return oss.str();
 }
 
