@@ -195,6 +195,9 @@
                     <Button DockPanel.Dock="Right" Content="Clear"
                             Command="{Binding ClearLogCommand}"
                             Style="{StaticResource RedBtn}" Padding="8,2" MinWidth="60"/>
+                    <Button DockPanel.Dock="Right" Content="{Binding LoggingLabel}"
+                            Command="{Binding ToggleLoggingCommand}"
+                            Style="{StaticResource AccentBtn}" Padding="8,2" MinWidth="90" Margin="0,0,6,0"/>
                 </DockPanel>
                 <ListView Grid.Row="1"
                           ItemsSource="{Binding PacketLog}"

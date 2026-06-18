@@ -58,6 +58,8 @@ namespace UdpSimulator.ViewModels
 
         [ObservableProperty] private PacketLogEntry? selectedPacket;
         [ObservableProperty] private string          hexDetail = "";
+        [ObservableProperty] private bool            isLoggingEnabled = true;
+        [ObservableProperty] private string          loggingLabel     = "Pause Log";
 
         // ── Ctor ──────────────────────────────────────────────────────────────
         public MainViewModel()
@@ -202,6 +204,13 @@ namespace UdpSimulator.ViewModels
         private void ClearLog() => PacketLog.Clear();
 
         [RelayCommand]
+        private void ToggleLogging()
+        {
+            IsLoggingEnabled = !IsLoggingEnabled;
+            LoggingLabel     = IsLoggingEnabled ? "Pause Log" : "Resume Log";
+        }
+
+        [RelayCommand]
         private void ExportLog()
         {
             var dlg = new SaveFileDialog
@@ -257,8 +266,8 @@ namespace UdpSimulator.ViewModels
 
         private void AddToLog(PacketLogEntry entry)
         {
+            if (!IsLoggingEnabled) return;
             PacketLog.Add(entry);
-            // Keep at most 2000 entries
             while (PacketLog.Count > 2000) PacketLog.RemoveAt(0);
         }
 
