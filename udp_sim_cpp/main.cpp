@@ -31,6 +31,7 @@
 static std::atomic<bool> g_quit{false};
 static std::mutex        g_print_mu;
 static bool              g_verbose = false;
+static bool              g_logging = true;   // real-time RX/TX print on/off
 
 static void sig_handler(int) { g_quit = true; }
 
@@ -121,6 +122,7 @@ static void print_packet_detail(const Packet& p)
 static void print_packet(const Packet& p)
 {
     std::lock_guard<std::mutex> lk(g_print_mu);
+    if (!g_logging) return;
     if (g_verbose && !p.is_tx)
         print_packet_detail(p);
     else
@@ -149,6 +151,8 @@ static void print_help()
         "  show [n]              Hex+ASCII detail of last n packets (default 1)\n"
         "  dump [n]              Hex+ASCII detail of nth-last packet (default 1)\n"
         "  verbose [on|off]      Auto hex+ASCII dump on every RX\n"
+        "  logon                 Resume real-time RX/TX printing\n"
+        "  logoff                Pause  real-time RX/TX printing\n"
         "  clear                 Clear packet log\n"
         "\n" CLR_BOLD "  [Pcap]" CLR_RESET "\n"
         "  pcap <file.pcap>      Start capturing to file\n"
@@ -176,7 +180,8 @@ static void print_status(const UdpConfig& cfg, const UdpSocket& sock,
         "  Mode     : " << mode_str << '\n' <<
         "  TX       : " << sock.tx_count() << " pkts / " << sock.tx_bytes() << " bytes\n"
         "  RX       : " << sock.rx_count() << " pkts / " << sock.rx_bytes() << " bytes\n"
-        "  Log      : " << log.size() << " packets\n";
+        "  Log      : " << log.size() << " packets\n"
+        "  Logging  : " << (g_logging ? "ON" : "OFF (logon to resume)") << '\n';
 
     if (as.active) {
         std::string pm = as.mode == PayloadMode::Counter ? "counter"
@@ -483,6 +488,14 @@ int main(int argc, char* argv[])
             if (pkts.empty()) { std::cout << "Log is empty.\n"; continue; }
             std::lock_guard<std::mutex> lk(g_print_mu);
             print_packet_detail(pkts[std::max(0, (int)pkts.size() - n)]);
+
+        } else if (cmd == "logon") {
+            g_logging = true;
+            std::cout << CLR_YELLOW "Real-time log: ON\n" CLR_RESET;
+
+        } else if (cmd == "logoff") {
+            g_logging = false;
+            std::cout << CLR_YELLOW "Real-time log: OFF (packets still counted/logged/pcap'd)\n" CLR_RESET;
 
         } else if (cmd == "verbose") {
             std::string val; iss >> val;
