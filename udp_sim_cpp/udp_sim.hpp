@@ -76,6 +76,7 @@ public:
     std::vector<Packet>  snapshot() const;
     void                 clear();
     size_t               size() const;
+    void                 set_max(size_t max);
 
 private:
     mutable std::mutex  mu_;

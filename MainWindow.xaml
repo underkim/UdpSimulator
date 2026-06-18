@@ -198,9 +198,17 @@
                     <Button DockPanel.Dock="Right" Content="{Binding LoggingLabel}"
                             Command="{Binding ToggleLoggingCommand}"
                             Style="{StaticResource AccentBtn}" Padding="8,2" MinWidth="90" Margin="0,0,6,0"/>
+                    <Button DockPanel.Dock="Right" Content="{Binding AutoScrollLabel}"
+                            Command="{Binding ToggleAutoScrollCommand}"
+                            Style="{StaticResource AccentBtn}" Padding="8,2" MinWidth="90" Margin="0,0,6,0"/>
+                    <ComboBox DockPanel.Dock="Right" Width="80"
+                              ItemsSource="{Binding LogFilters}"
+                              SelectedItem="{Binding LogFilter}"
+                              Margin="0,0,6,0" VerticalAlignment="Center"/>
                 </DockPanel>
-                <ListView Grid.Row="1"
-                          ItemsSource="{Binding PacketLog}"
+                <ListView x:Name="PacketListView"
+                          Grid.Row="1"
+                          ItemsSource="{Binding FilteredLog}"
                           SelectedItem="{Binding SelectedPacket}"
                           Background="#252525" BorderBrush="#444"
                           Foreground="#E0E0E0" FontFamily="Consolas"
@@ -238,7 +246,12 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
-                <TextBlock Grid.Row="0" Text="Hex Detail" Foreground="#888" Margin="0,0,0,4"/>
+                <DockPanel Grid.Row="0" Margin="0,0,0,4">
+                    <TextBlock Text="Hex Detail" Foreground="#888" VerticalAlignment="Center"/>
+                    <Button DockPanel.Dock="Right" Content="Resend"
+                            Command="{Binding ResendPacketCommand}"
+                            Style="{StaticResource GreenBtn}" Padding="8,2" MinWidth="70"/>
+                </DockPanel>
                 <TextBox Grid.Row="1"
                          Text="{Binding HexDetail, Mode=OneWay}"
                          IsReadOnly="True"

@@ -2,13 +2,17 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Win32;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.IO;
 using System.Windows;
+using System.Windows.Data;
 using UdpSimulator.Models;
 using UdpSimulator.Services;
 
 namespace UdpSimulator.ViewModels
 {
+    public enum LogFilter { All, TxOnly, RxOnly }
+
     public partial class MainViewModel : ObservableObject, IDisposable
     {
         // ── Services ──────────────────────────────────────────────────────────
@@ -25,9 +29,9 @@ namespace UdpSimulator.ViewModels
         public IEnumerable<UdpMode> Modes => Enum.GetValues<UdpMode>();
 
         // ── Connection state ──────────────────────────────────────────────────
-        [ObservableProperty] private bool   isConnected = false;
+        [ObservableProperty] private bool   isConnected  = false;
         [ObservableProperty] private string connectLabel = "Connect";
-        [ObservableProperty] private string statusText  = "Disconnected";
+        [ObservableProperty] private string statusText   = "Disconnected";
 
         // ── Send ──────────────────────────────────────────────────────────────
         [ObservableProperty] private string sendHex  = "DE AD BE EF";
@@ -46,9 +50,9 @@ namespace UdpSimulator.ViewModels
         [ObservableProperty] private string sendFilePath = "";
 
         // ── Pcap ──────────────────────────────────────────────────────────────
-        [ObservableProperty] private bool   isPcapActive  = false;
-        [ObservableProperty] private string pcapPath      = "capture.pcap";
-        [ObservableProperty] private string pcapLabel     = "Start Capture";
+        [ObservableProperty] private bool   isPcapActive = false;
+        [ObservableProperty] private string pcapPath     = "capture.pcap";
+        [ObservableProperty] private string pcapLabel    = "Start Capture";
 
         // ── Stats ─────────────────────────────────────────────────────────────
         [ObservableProperty] private string statsText = "";
@@ -57,18 +61,36 @@ namespace UdpSimulator.ViewModels
         public ObservableCollection<PacketLogEntry> PacketLog { get; } = new();
 
         [ObservableProperty] private PacketLogEntry? selectedPacket;
-        [ObservableProperty] private string          hexDetail = "";
+        [ObservableProperty] private string          hexDetail        = "";
         [ObservableProperty] private bool            isLoggingEnabled = true;
         [ObservableProperty] private string          loggingLabel     = "Pause Log";
+        [ObservableProperty] private bool            isAutoScrollEnabled = true;
+        [ObservableProperty] private string          autoScrollLabel  = "Scroll: ON";
+        [ObservableProperty] private LogFilter       logFilter        = LogFilter.All;
+
+        public IEnumerable<LogFilter> LogFilters => Enum.GetValues<LogFilter>();
+        public ICollectionView FilteredLog { get; }
 
         // ── Ctor ──────────────────────────────────────────────────────────────
         public MainViewModel()
         {
             _autoSend = new AutoSendService(_udp, _pcap);
 
-            _udp.PacketReceived    += OnPacketReceived;
-            _autoSend.PacketSent   += OnPacketReceived;
+            _udp.PacketReceived  += OnPacketReceived;
+            _autoSend.PacketSent += OnPacketReceived;
+
+            FilteredLog        = CollectionViewSource.GetDefaultView(PacketLog);
+            FilteredLog.Filter = o => o is PacketLogEntry e && PassesFilter(e);
         }
+
+        partial void OnLogFilterChanged(LogFilter value) => FilteredLog.Refresh();
+
+        private bool PassesFilter(PacketLogEntry e) => LogFilter switch
+        {
+            LogFilter.TxOnly => e.Direction == "TX",
+            LogFilter.RxOnly => e.Direction == "RX",
+            _                => true,
+        };
 
         // ── Connection ────────────────────────────────────────────────────────
 
@@ -78,8 +100,8 @@ namespace UdpSimulator.ViewModels
             if (IsConnected)
             {
                 _autoSend.Stop();
-                IsAutoSending  = false;
-                AutoSendLabel  = "Start Auto-send";
+                IsAutoSending = false;
+                AutoSendLabel = "Start Auto-send";
                 _udp.Stop();
                 IsConnected  = false;
                 ConnectLabel = "Connect";
@@ -208,6 +230,20 @@ namespace UdpSimulator.ViewModels
         {
             IsLoggingEnabled = !IsLoggingEnabled;
             LoggingLabel     = IsLoggingEnabled ? "Pause Log" : "Resume Log";
+        }
+
+        [RelayCommand]
+        private void ToggleAutoScroll()
+        {
+            IsAutoScrollEnabled = !IsAutoScrollEnabled;
+            AutoScrollLabel     = IsAutoScrollEnabled ? "Scroll: ON" : "Scroll: OFF";
+        }
+
+        [RelayCommand]
+        private void ResendPacket()
+        {
+            if (SelectedPacket == null || !IsConnected) return;
+            DoSend((byte[])SelectedPacket.Data.Clone());
         }
 
         [RelayCommand]
