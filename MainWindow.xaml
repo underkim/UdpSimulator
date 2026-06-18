@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:UdpSimulator.ViewModels"
         xmlns:conv="clr-namespace:UdpSimulator.Converters"
-        Title="UDP Simulator" Height="760" Width="1150"
+        Title="UDP Simulator" Height="820" Width="1200"
         Background="#1E1E1E" Foreground="#E0E0E0"
         FontFamily="Consolas" FontSize="13">
 
@@ -35,7 +35,7 @@
             <Setter Property="BorderBrush" Value="#666"/>
             <Setter Property="Padding"     Value="10,4"/>
             <Setter Property="Cursor"      Value="Hand"/>
-            <Setter Property="MinWidth"    Value="90"/>
+            <Setter Property="MinWidth"    Value="80"/>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
                     <Setter Property="Background" Value="#505050"/>
@@ -70,6 +70,14 @@
                 </Trigger>
             </Style.Triggers>
         </Style>
+        <Style x:Key="OrangeBtn" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Background" Value="#E65100"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#F57C00"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
     </Window.Resources>
 
     <Window.DataContext>
@@ -81,8 +89,9 @@
             <RowDefinition Height="Auto"/>  <!-- 0: Connection -->
             <RowDefinition Height="Auto"/>  <!-- 1: Send -->
             <RowDefinition Height="Auto"/>  <!-- 2: Auto-send + Pcap -->
-            <RowDefinition Height="*"/>     <!-- 3: Log + Detail -->
-            <RowDefinition Height="Auto"/>  <!-- 4: Status bar -->
+            <RowDefinition Height="Auto"/>  <!-- 3: Templates -->
+            <RowDefinition Height="*"/>     <!-- 4: Log + Detail -->
+            <RowDefinition Height="Auto"/>  <!-- 5: Status bar -->
         </Grid.RowDefinitions>
 
         <!-- ── 0: Connection ─────────────────────────────────────────────── -->
@@ -110,6 +119,13 @@
         <!-- ── 1: Send ───────────────────────────────────────────────────── -->
         <GroupBox Grid.Row="1" Header="Send">
             <StackPanel>
+                <!-- Burst count -->
+                <DockPanel Margin="0,2">
+                    <Label Content="Burst:" Width="50"/>
+                    <TextBox Width="50" Text="{Binding BurstCount}" Margin="0,0,8,0"
+                             ToolTip="Number of packets to send per click"/>
+                    <Label Content="(packets per send)" Foreground="#666"/>
+                </DockPanel>
                 <!-- Hex send -->
                 <DockPanel Margin="0,2">
                     <Label Content="Hex:" Width="50"/>
@@ -153,7 +169,7 @@
                     <Label Content="Counter offset:"/>
                     <TextBox Width="40" Text="{Binding CounterOffset}" Margin="0,0,12,0"/>
                     <Label Content="Payload (hex):"/>
-                    <TextBox Width="220" Text="{Binding AutoPayloadHex, UpdateSourceTrigger=PropertyChanged}"
+                    <TextBox Width="200" Text="{Binding AutoPayloadHex, UpdateSourceTrigger=PropertyChanged}"
                              FontFamily="Consolas" Margin="0,0,8,0"/>
                     <Button Content="{Binding AutoSendLabel}"
                             Command="{Binding ToggleAutoSendCommand}"
@@ -161,9 +177,9 @@
                 </StackPanel>
             </GroupBox>
 
-            <GroupBox Grid.Column="1" Header="Pcap Capture" MinWidth="360">
+            <GroupBox Grid.Column="1" Header="Pcap Capture" MinWidth="340">
                 <StackPanel Orientation="Horizontal" Margin="0,2">
-                    <TextBox Width="160" Text="{Binding PcapPath}" IsReadOnly="True"
+                    <TextBox Width="140" Text="{Binding PcapPath}" IsReadOnly="True"
                              Background="#1A1A1A" Margin="0,0,4,0"/>
                     <Button Content="Browse…" Command="{Binding BrowsePcapPathCommand}" Margin="0,0,4,0"/>
                     <Button Content="{Binding PcapLabel}"
@@ -176,12 +192,30 @@
             </GroupBox>
         </Grid>
 
-        <!-- ── 3: Packet log + Hex detail ────────────────────────────────── -->
-        <Grid Grid.Row="3" Margin="4">
+        <!-- ── 3: Payload Templates ──────────────────────────────────────── -->
+        <GroupBox Grid.Row="3" Header="Payload Templates">
+            <StackPanel Orientation="Horizontal" Margin="0,2">
+                <Label Content="Name:"/>
+                <TextBox Width="120" Text="{Binding TemplateName, UpdateSourceTrigger=PropertyChanged}"
+                         Margin="0,0,8,0" ToolTip="Template name to save"/>
+                <Button Content="Save" Command="{Binding SaveTemplateCommand}"
+                        Style="{StaticResource GreenBtn}" Margin="0,0,8,0"/>
+                <Label Content="Load:"/>
+                <ComboBox Width="140" ItemsSource="{Binding TemplateNames}"
+                          SelectedItem="{Binding SelectedTemplate}" Margin="0,0,8,0"/>
+                <Button Content="Load →" Command="{Binding LoadTemplateCommand}"
+                        Style="{StaticResource AccentBtn}" Margin="0,0,4,0"/>
+                <Button Content="Delete" Command="{Binding DeleteTemplateCommand}"
+                        Style="{StaticResource RedBtn}"/>
+            </StackPanel>
+        </GroupBox>
+
+        <!-- ── 4: Packet log + Hex detail ────────────────────────────────── -->
+        <Grid Grid.Row="4" Margin="4">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="5"/>
-                <ColumnDefinition Width="380"/>
+                <ColumnDefinition Width="390"/>
             </Grid.ColumnDefinitions>
 
             <!-- Packet list -->
@@ -227,11 +261,11 @@
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="Peer"  Width="170"
+                            <GridViewColumn Header="Peer"  Width="160"
                                             DisplayMemberBinding="{Binding Peer}"/>
                             <GridViewColumn Header="Bytes" Width="55"
                                             DisplayMemberBinding="{Binding Size}"/>
-                            <GridViewColumn Header="Data (first 16 bytes)" Width="340"
+                            <GridViewColumn Header="Data (first 16 bytes)" Width="330"
                                             DisplayMemberBinding="{Binding HexPreview}"/>
                         </GridView>
                     </ListView.View>
@@ -251,6 +285,9 @@
                     <Button DockPanel.Dock="Right" Content="Resend"
                             Command="{Binding ResendPacketCommand}"
                             Style="{StaticResource GreenBtn}" Padding="8,2" MinWidth="70"/>
+                    <Button DockPanel.Dock="Right" Content="Copy"
+                            Command="{Binding CopyHexCommand}"
+                            Style="{StaticResource OrangeBtn}" Padding="8,2" MinWidth="60" Margin="0,0,6,0"/>
                 </DockPanel>
                 <TextBox Grid.Row="1"
                          Text="{Binding HexDetail, Mode=OneWay}"
@@ -264,15 +301,19 @@
             </Grid>
         </Grid>
 
-        <!-- ── 4: Status bar ──────────────────────────────────────────────── -->
-        <Border Grid.Row="4" Background="#252525" Padding="8,4" Margin="4,4,4,0">
+        <!-- ── 5: Status bar ──────────────────────────────────────────────── -->
+        <Border Grid.Row="5" Background="#252525" Padding="8,4" Margin="4,4,4,0">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <TextBlock Text="{Binding StatusText}" Foreground="#4CAF50" FontWeight="Bold"/>
-                <TextBlock Grid.Column="1" Text="{Binding StatsText}" Foreground="#888"/>
+                <TextBlock Grid.Column="1" Text="{Binding RttText}"  Foreground="#FFB300" Margin="16,0"/>
+                <TextBlock Grid.Column="2" Text="{Binding RateText}" Foreground="#29B6F6" Margin="0,0,16,0"/>
+                <TextBlock Grid.Column="3" Text="{Binding StatsText}" Foreground="#888"/>
             </Grid>
         </Border>
     </Grid>

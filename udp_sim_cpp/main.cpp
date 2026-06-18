@@ -14,6 +14,8 @@
 #include <iomanip>
 #include <algorithm>
 #include <random>
+#include <condition_variable>
+#include <filesystem>
 #include <getopt.h>
 
 // ─── Terminal colors ──────────────────────────────────────────────────────────
@@ -32,6 +34,16 @@ static std::atomic<bool> g_quit{false};
 static std::mutex        g_print_mu;
 static bool              g_verbose = false;
 static bool              g_logging = true;   // real-time RX/TX print on/off
+
+// ping state
+static std::atomic<bool>                                    g_ping_waiting{false};
+static std::mutex                                           g_ping_mu;
+static std::condition_variable                              g_ping_cv;
+static std::chrono::system_clock::time_point               g_ping_rx_time;
+
+// rate tracking
+static std::chrono::steady_clock::time_point               g_rate_last_check;
+static uint64_t                                            g_rate_prev_tx{0}, g_rate_prev_rx{0};
 
 static void sig_handler(int) { g_quit = true; }
 
@@ -131,6 +143,69 @@ static void print_packet(const Packet& p)
 
 // ─── Help / status / config ───────────────────────────────────────────────────
 
+// ─── Template helpers ─────────────────────────────────────────────────────────
+
+static std::string template_dir()
+{
+    const char* home = getenv("HOME");
+    return std::string(home ? home : ".") + "/.udpsim_templates";
+}
+
+static std::string template_path(const std::string& name)
+{
+    return template_dir() + "/" + name + ".bin";
+}
+
+static void cmd_template(const std::string& sub, const std::string& name,
+                          AutoSend& as)
+{
+    namespace fs = std::filesystem;
+    if (sub == "save") {
+        if (name.empty()) { std::cout << CLR_RED "Usage: template save <name>\n" CLR_RESET; return; }
+        fs::create_directories(template_dir());
+        std::ofstream f(template_path(name), std::ios::binary);
+        if (!f) { std::cout << CLR_RED "Cannot write template.\n" CLR_RESET; return; }
+        std::lock_guard<std::mutex> lk(as.mu);
+        f.write(reinterpret_cast<const char*>(as.payload.data()), as.payload.size());
+        std::cout << CLR_YELLOW "Template '" << name << "' saved ("
+                  << as.payload.size() << " bytes)\n" CLR_RESET;
+
+    } else if (sub == "load") {
+        if (name.empty()) { std::cout << CLR_RED "Usage: template load <name>\n" CLR_RESET; return; }
+        std::ifstream f(template_path(name), std::ios::binary);
+        if (!f) { std::cout << CLR_RED "Template '" << name << "' not found.\n" CLR_RESET; return; }
+        std::vector<uint8_t> data{std::istreambuf_iterator<char>(f), {}};
+        { std::lock_guard<std::mutex> lk(as.mu); as.payload = data; as.mode = PayloadMode::Fixed; }
+        std::cout << CLR_YELLOW "Template '" << name << "' loaded: "
+                  << to_hex(data, 32) << "\n" CLR_RESET;
+
+    } else if (sub == "list") {
+        std::cout << CLR_BOLD "\nSaved templates:\n" CLR_RESET;
+        std::error_code ec;
+        bool any = false;
+        for (auto& e : fs::directory_iterator(template_dir(), ec)) {
+            if (e.path().extension() == ".bin") {
+                auto sz = fs::file_size(e.path(), ec);
+                std::cout << "  " << e.path().stem().string()
+                          << " (" << sz << " bytes)\n";
+                any = true;
+            }
+        }
+        if (!any) std::cout << "  (none)\n";
+        std::cout << '\n';
+
+    } else if (sub == "del") {
+        if (name.empty()) { std::cout << CLR_RED "Usage: template del <name>\n" CLR_RESET; return; }
+        std::error_code ec;
+        if (std::filesystem::remove(template_path(name), ec))
+            std::cout << CLR_YELLOW "Template '" << name << "' deleted.\n" CLR_RESET;
+        else
+            std::cout << CLR_RED "Template '" << name << "' not found.\n" CLR_RESET;
+    } else {
+        std::cout << "Usage: template save|load|list|del <name>\n";
+    }
+}
+
 static void print_help()
 {
     std::cout <<
@@ -157,6 +232,13 @@ static void print_help()
         "  logrx [n]             Show last n RX packets (default 10)\n"
         "  logmax <n>            Set max packet log size (default 1000)\n"
         "  resend [n]            Resend nth-last packet (default 1)\n"
+        "  burst <n>             Send current payload n times immediately\n"
+        "  ping [timeout_ms]     Send payload, measure RTT to first RX (default 2000ms)\n"
+        "  rate                  Show TX/RX packets-per-second since last call\n"
+        "  template save <name>  Save current auto-send payload as named template\n"
+        "  template load <name>  Load named template into auto-send payload\n"
+        "  template list         List saved templates\n"
+        "  template del <name>   Delete named template\n"
         "  clear                 Clear packet log\n"
         "\n" CLR_BOLD "  [Pcap]" CLR_RESET "\n"
         "  pcap <file.pcap>      Start capturing to file\n"
@@ -396,9 +478,17 @@ int main(int argc, char* argv[])
                       << initial_pcap << CLR_RESET "\n";
     }
 
+    g_rate_last_check = std::chrono::steady_clock::now();
+
     auto rx_cb = [&](const Packet& p) {
         log.push(p);
         if (pcap.is_open()) pcap.write(p);
+        // Signal ping if waiting
+        if (g_ping_waiting.exchange(false)) {
+            std::lock_guard<std::mutex> lk(g_ping_mu);
+            g_ping_rx_time = p.timestamp;
+            g_ping_cv.notify_one();
+        }
         print_packet(p);
         std::lock_guard<std::mutex> lk(g_print_mu);
         std::cout << "> " << std::flush;
@@ -533,6 +623,58 @@ int main(int argc, char* argv[])
                 std::cout << CLR_RED "Packet not found.\n" CLR_RESET;
             else
                 do_send(sock, log, pcap, cfg, pkts[idx].data);
+
+        } else if (cmd == "burst") {
+            int n = 1; iss >> n; if (n <= 0) n = 1;
+            std::vector<uint8_t> payload;
+            { std::lock_guard<std::mutex> lk(as.mu); payload = as.payload; }
+            if (payload.empty()) { std::cout << CLR_RED "Payload is empty.\n" CLR_RESET; }
+            else {
+                std::cout << CLR_YELLOW "Burst sending " << n << " packets...\n" CLR_RESET;
+                for (int i = 0; i < n; ++i)
+                    do_send(sock, log, pcap, cfg, payload);
+                std::cout << CLR_YELLOW "Burst done.\n" CLR_RESET;
+            }
+
+        } else if (cmd == "ping") {
+            int timeout_ms = 2000; iss >> timeout_ms;
+            if (timeout_ms <= 0) timeout_ms = 2000;
+            std::vector<uint8_t> payload;
+            { std::lock_guard<std::mutex> lk(as.mu); payload = as.payload; }
+            if (payload.empty()) { std::cout << CLR_RED "Payload is empty.\n" CLR_RESET; }
+            else {
+                std::unique_lock<std::mutex> lk(g_ping_mu);
+                g_ping_waiting = true;
+                auto tx_time = std::chrono::system_clock::now();
+                do_send(sock, log, pcap, cfg, payload);
+                bool got = g_ping_cv.wait_for(lk,
+                    std::chrono::milliseconds(timeout_ms),
+                    [] { return !g_ping_waiting.load(); });
+                if (got) {
+                    auto rtt_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                        g_ping_rx_time - tx_time).count();
+                    std::cout << CLR_YELLOW "RTT: " << rtt_us / 1000.0 << " ms\n" CLR_RESET;
+                } else {
+                    g_ping_waiting = false;
+                    std::cout << CLR_RED "Ping timeout (" << timeout_ms << " ms)\n" CLR_RESET;
+                }
+            }
+
+        } else if (cmd == "rate") {
+            auto now = std::chrono::steady_clock::now();
+            double elapsed = std::chrono::duration<double>(now - g_rate_last_check).count();
+            if (elapsed < 0.01) elapsed = 0.01;
+            uint64_t cur_tx = sock.tx_count(), cur_rx = sock.rx_count();
+            double tx_rate = (cur_tx - g_rate_prev_tx) / elapsed;
+            double rx_rate = (cur_rx - g_rate_prev_rx) / elapsed;
+            g_rate_prev_tx = cur_tx; g_rate_prev_rx = cur_rx;
+            g_rate_last_check = now;
+            std::cout << CLR_YELLOW "TX: " << std::fixed << std::setprecision(1)
+                      << tx_rate << " pkts/s   RX: " << rx_rate << " pkts/s\n" CLR_RESET;
+
+        } else if (cmd == "template") {
+            std::string sub, name; iss >> sub >> name;
+            cmd_template(sub, name, as);
 
         } else if (cmd == "verbose") {
             std::string val; iss >> val;

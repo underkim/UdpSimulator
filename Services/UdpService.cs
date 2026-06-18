@@ -13,10 +13,11 @@ namespace UdpSimulator.Services
         private bool        _running;
         private ulong       _txCount, _rxCount, _txBytes, _rxBytes;
 
-        public ulong TxCount => _txCount;
-        public ulong RxCount => _rxCount;
-        public ulong TxBytes => _txBytes;
-        public ulong RxBytes => _rxBytes;
+        public ulong    TxCount   => _txCount;
+        public ulong    RxCount   => _rxCount;
+        public ulong    TxBytes   => _txBytes;
+        public ulong    RxBytes   => _rxBytes;
+        public DateTime LastRxTime { get; private set; }
 
         public bool Start(UdpConfig cfg)
         {
@@ -73,9 +74,10 @@ namespace UdpSimulator.Services
                     _rxCount++;
                     _rxBytes += (ulong)result.Buffer.Length;
 
+                    LastRxTime = DateTime.Now;
                     var entry = new PacketLogEntry
                     {
-                        Timestamp = DateTime.Now,
+                        Timestamp = LastRxTime,
                         Direction = "RX",
                         Peer      = result.RemoteEndPoint.ToString(),
                         Size      = result.Buffer.Length,

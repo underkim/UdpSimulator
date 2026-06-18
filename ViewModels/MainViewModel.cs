@@ -6,6 +6,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Data;
+using System.Windows.Threading;
 using UdpSimulator.Models;
 using UdpSimulator.Services;
 
@@ -19,6 +20,9 @@ namespace UdpSimulator.ViewModels
         private readonly UdpService      _udp      = new();
         private readonly PcapService     _pcap     = new();
         private readonly AutoSendService _autoSend;
+        private readonly TemplateService _templates = new();
+        private readonly SettingsService _settings  = new();
+        private readonly DispatcherTimer _statsTimer;
 
         // ── Config bindings ───────────────────────────────────────────────────
         [ObservableProperty] private string  localIp      = "0.0.0.0";
@@ -36,6 +40,7 @@ namespace UdpSimulator.ViewModels
         // ── Send ──────────────────────────────────────────────────────────────
         [ObservableProperty] private string sendHex  = "DE AD BE EF";
         [ObservableProperty] private string sendText = "";
+        [ObservableProperty] private int    burstCount = 1;
 
         // ── Auto-send ─────────────────────────────────────────────────────────
         [ObservableProperty] private bool              isAutoSending   = false;
@@ -56,17 +61,27 @@ namespace UdpSimulator.ViewModels
 
         // ── Stats ─────────────────────────────────────────────────────────────
         [ObservableProperty] private string statsText = "";
+        [ObservableProperty] private string rateText  = "";
+        [ObservableProperty] private string rttText   = "";
+
+        private ulong _prevTx, _prevRx;
+        private DateTime _lastTxTime;
+
+        // ── Templates ─────────────────────────────────────────────────────────
+        [ObservableProperty] private string  templateName     = "";
+        [ObservableProperty] private string? selectedTemplate = null;
+        public ObservableCollection<string> TemplateNames { get; } = new();
 
         // ── Packet log ────────────────────────────────────────────────────────
         public ObservableCollection<PacketLogEntry> PacketLog { get; } = new();
 
         [ObservableProperty] private PacketLogEntry? selectedPacket;
-        [ObservableProperty] private string          hexDetail        = "";
-        [ObservableProperty] private bool            isLoggingEnabled = true;
-        [ObservableProperty] private string          loggingLabel     = "Pause Log";
+        [ObservableProperty] private string          hexDetail           = "";
+        [ObservableProperty] private bool            isLoggingEnabled    = true;
+        [ObservableProperty] private string          loggingLabel        = "Pause Log";
         [ObservableProperty] private bool            isAutoScrollEnabled = true;
-        [ObservableProperty] private string          autoScrollLabel  = "Scroll: ON";
-        [ObservableProperty] private LogFilter       logFilter        = LogFilter.All;
+        [ObservableProperty] private string          autoScrollLabel     = "Scroll: ON";
+        [ObservableProperty] private LogFilter       logFilter           = LogFilter.All;
 
         public IEnumerable<LogFilter> LogFilters => Enum.GetValues<LogFilter>();
         public ICollectionView FilteredLog { get; }
@@ -81,6 +96,26 @@ namespace UdpSimulator.ViewModels
 
             FilteredLog        = CollectionViewSource.GetDefaultView(PacketLog);
             FilteredLog.Filter = o => o is PacketLogEntry e && PassesFilter(e);
+
+            // Load settings
+            var s = _settings.Load();
+            LocalIp       = s.LocalIp;
+            LocalPort     = s.LocalPort;
+            RemoteIp      = s.RemoteIp;
+            RemotePort    = s.RemotePort;
+            SelectedMode  = s.Mode;
+            BurstCount    = s.BurstCount;
+            AutoIntervalMs = s.AutoIntervalMs;
+            AutoPayloadHex = s.AutoPayloadHex;
+            SendHex        = s.SendHex;
+
+            // Load templates
+            RefreshTemplateNames();
+
+            // pkts/sec timer
+            _statsTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            _statsTimer.Tick += OnStatsTick;
+            _statsTimer.Start();
         }
 
         partial void OnLogFilterChanged(LogFilter value) => FilteredLog.Refresh();
@@ -91,6 +126,17 @@ namespace UdpSimulator.ViewModels
             LogFilter.RxOnly => e.Direction == "RX",
             _                => true,
         };
+
+        // ── Stats tick ────────────────────────────────────────────────────────
+
+        private void OnStatsTick(object? sender, EventArgs e)
+        {
+            ulong tx = _udp.TxCount, rx = _udp.RxCount;
+            ulong txRate = tx - _prevTx;
+            ulong rxRate = rx - _prevRx;
+            _prevTx = tx; _prevRx = rx;
+            RateText = $"TX: {txRate} p/s   RX: {rxRate} p/s";
+        }
 
         // ── Connection ────────────────────────────────────────────────────────
 
@@ -131,7 +177,7 @@ namespace UdpSimulator.ViewModels
             byte[]? data = ParseHex(SendHex);
             if (data == null || data.Length == 0)
             { MessageBox.Show("Invalid hex input."); return; }
-            DoSend(data);
+            DoBurst(data);
         }
 
         [RelayCommand]
@@ -139,7 +185,7 @@ namespace UdpSimulator.ViewModels
         {
             if (!IsConnected) return;
             if (string.IsNullOrEmpty(SendText)) return;
-            DoSend(System.Text.Encoding.UTF8.GetBytes(SendText));
+            DoBurst(System.Text.Encoding.UTF8.GetBytes(SendText));
         }
 
         [RelayCommand]
@@ -155,8 +201,7 @@ namespace UdpSimulator.ViewModels
             if (!IsConnected) return;
             if (!File.Exists(SendFilePath))
             { MessageBox.Show("File not found: " + SendFilePath); return; }
-            byte[] data = File.ReadAllBytes(SendFilePath);
-            DoSend(data);
+            DoBurst(File.ReadAllBytes(SendFilePath));
         }
 
         // ── Auto-send ─────────────────────────────────────────────────────────
@@ -185,6 +230,42 @@ namespace UdpSimulator.ViewModels
                 IsAutoSending = true;
                 AutoSendLabel = "Stop Auto-send";
             }
+        }
+
+        // ── Templates ─────────────────────────────────────────────────────────
+
+        [RelayCommand]
+        private void SaveTemplate()
+        {
+            if (string.IsNullOrWhiteSpace(TemplateName))
+            { MessageBox.Show("Template name cannot be empty."); return; }
+            _templates.Save(TemplateName, AutoPayloadHex);
+            RefreshTemplateNames();
+            SelectedTemplate = TemplateName;
+        }
+
+        [RelayCommand]
+        private void LoadTemplate()
+        {
+            if (SelectedTemplate == null) return;
+            var t = _templates.Get(SelectedTemplate);
+            if (t != null) AutoPayloadHex = t.HexPayload;
+        }
+
+        [RelayCommand]
+        private void DeleteTemplate()
+        {
+            if (SelectedTemplate == null) return;
+            _templates.Delete(SelectedTemplate);
+            RefreshTemplateNames();
+            SelectedTemplate = null;
+        }
+
+        private void RefreshTemplateNames()
+        {
+            TemplateNames.Clear();
+            foreach (var t in _templates.Templates)
+                TemplateNames.Add(t.Name);
         }
 
         // ── Pcap ──────────────────────────────────────────────────────────────
@@ -243,7 +324,14 @@ namespace UdpSimulator.ViewModels
         private void ResendPacket()
         {
             if (SelectedPacket == null || !IsConnected) return;
-            DoSend((byte[])SelectedPacket.Data.Clone());
+            DoBurst((byte[])SelectedPacket.Data.Clone());
+        }
+
+        [RelayCommand]
+        private void CopyHex()
+        {
+            if (!string.IsNullOrEmpty(HexDetail))
+                Clipboard.SetText(HexDetail);
         }
 
         [RelayCommand]
@@ -273,14 +361,23 @@ namespace UdpSimulator.ViewModels
 
         // ── Helpers ───────────────────────────────────────────────────────────
 
+        private void DoBurst(byte[] data)
+        {
+            int count = Math.Max(1, BurstCount);
+            for (int i = 0; i < count; i++)
+                DoSend((byte[])data.Clone());
+        }
+
         private void DoSend(byte[] data)
         {
             if (!_udp.Send(data))
             { MessageBox.Show("Send failed."); return; }
 
+            _lastTxTime = DateTime.Now;
+
             var entry = new PacketLogEntry
             {
-                Timestamp = DateTime.Now,
+                Timestamp = _lastTxTime,
                 Direction = "TX",
                 Peer      = $"{RemoteIp}:{RemotePort}",
                 Size      = data.Length,
@@ -295,6 +392,13 @@ namespace UdpSimulator.ViewModels
         {
             Application.Current.Dispatcher.Invoke(() =>
             {
+                // RTT: measure time from last TX to this RX
+                if (entry.Direction == "RX" && _lastTxTime != default)
+                {
+                    double rtt = (entry.Timestamp - _lastTxTime).TotalMilliseconds;
+                    if (rtt >= 0 && rtt < 60_000)
+                        RttText = $"RTT: {rtt:F1} ms";
+                }
                 AddToLog(entry);
                 UpdateStats();
             });
@@ -362,6 +466,19 @@ namespace UdpSimulator.ViewModels
 
         public void Dispose()
         {
+            _statsTimer.Stop();
+            _settings.Save(new AppSettings
+            {
+                LocalIp        = LocalIp,
+                LocalPort      = LocalPort,
+                RemoteIp       = RemoteIp,
+                RemotePort     = RemotePort,
+                Mode           = SelectedMode,
+                BurstCount     = BurstCount,
+                AutoIntervalMs = AutoIntervalMs,
+                AutoPayloadHex = AutoPayloadHex,
+                SendHex        = SendHex,
+            });
             _autoSend.Dispose();
             _udp.Dispose();
             _pcap.Dispose();
