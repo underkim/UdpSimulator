@@ -143,6 +143,13 @@ size_t PacketLog::size() const
     return log_.size();
 }
 
+void PacketLog::set_max(size_t max)
+{
+    std::lock_guard<std::mutex> lk(mu_);
+    max_ = max;
+    while (log_.size() > max_) log_.pop_front();
+}
+
 // ─── PcapWriter ───────────────────────────────────────────────────────────────
 //
 // Writes a minimal pcap file (link type LINKTYPE_RAW = 101).

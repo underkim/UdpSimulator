@@ -153,6 +153,10 @@ static void print_help()
         "  verbose [on|off]      Auto hex+ASCII dump on every RX\n"
         "  logon                 Resume real-time RX/TX printing\n"
         "  logoff                Pause  real-time RX/TX printing\n"
+        "  logtx [n]             Show last n TX packets (default 10)\n"
+        "  logrx [n]             Show last n RX packets (default 10)\n"
+        "  logmax <n>            Set max packet log size (default 1000)\n"
+        "  resend [n]            Resend nth-last packet (default 1)\n"
         "  clear                 Clear packet log\n"
         "\n" CLR_BOLD "  [Pcap]" CLR_RESET "\n"
         "  pcap <file.pcap>      Start capturing to file\n"
@@ -496,6 +500,39 @@ int main(int argc, char* argv[])
         } else if (cmd == "logoff") {
             g_logging = false;
             std::cout << CLR_YELLOW "Real-time log: OFF (packets still counted/logged/pcap'd)\n" CLR_RESET;
+
+        } else if (cmd == "logtx") {
+            int n = 10; iss >> n; if (n <= 0) n = 10;
+            auto pkts = log.snapshot();
+            int shown = 0;
+            for (int i = (int)pkts.size() - 1; i >= 0 && shown < n; --i)
+                if (pkts[i].is_tx) { print_packet_oneline(pkts[i]); ++shown; }
+            if (shown == 0) std::cout << CLR_YELLOW "No TX packets in log.\n" CLR_RESET;
+
+        } else if (cmd == "logrx") {
+            int n = 10; iss >> n; if (n <= 0) n = 10;
+            auto pkts = log.snapshot();
+            int shown = 0;
+            for (int i = (int)pkts.size() - 1; i >= 0 && shown < n; --i)
+                if (!pkts[i].is_tx) { print_packet_oneline(pkts[i]); ++shown; }
+            if (shown == 0) std::cout << CLR_YELLOW "No RX packets in log.\n" CLR_RESET;
+
+        } else if (cmd == "logmax") {
+            int n = 0; iss >> n;
+            if (n <= 0) { std::cout << CLR_RED "Usage: logmax <n>\n" CLR_RESET; }
+            else {
+                log.set_max(static_cast<size_t>(n));
+                std::cout << CLR_YELLOW "Log max set to " << n << "\n" CLR_RESET;
+            }
+
+        } else if (cmd == "resend") {
+            int n = 1; iss >> n; if (n <= 0) n = 1;
+            auto pkts = log.snapshot();
+            int idx = (int)pkts.size() - n;
+            if (idx < 0 || pkts.empty())
+                std::cout << CLR_RED "Packet not found.\n" CLR_RESET;
+            else
+                do_send(sock, log, pcap, cfg, pkts[idx].data);
 
         } else if (cmd == "verbose") {
             std::string val; iss >> val;
